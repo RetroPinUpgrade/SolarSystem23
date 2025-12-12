@@ -13,9 +13,9 @@
 #include "SelfTestAndAudit.h"
 #include <EEPROM.h>
 
-
-
+#ifndef RPU_SIMPLIFY_DISPLAY_FOR_7VOLUTION
 #define USE_SCORE_OVERRIDES
+#endif
 #define USE_SCORE_ACHIEVEMENTS
 
 #if defined(RPU_OS_USE_WAV_TRIGGER) || defined(RPU_OS_USE_WAV_TRIGGER_1p3)
@@ -24,7 +24,7 @@ SendOnlyWavTrigger wTrig;             // Our WAV Trigger object
 #endif
 
 #define GALAXY_2021_MAJOR_VERSION  2023
-#define GALAXY_2021_MINOR_VERSION  14
+#define GALAXY_2021_MINOR_VERSION  15
 #define DEBUG_MESSAGES  0
 
 // flickering GI attract (how long?)
@@ -336,7 +336,6 @@ byte CalloutsVolume = 10;
 boolean HighScoreReplay = true;
 boolean MatchFeature = true;
 boolean TournamentScoring = false;
-boolean ScrollingScores = true;
 boolean FreePlayMode = false;
 unsigned long HighScore = 0;
 unsigned long AwardScores[3];
@@ -344,6 +343,12 @@ unsigned long ExtraBallValue = 0;
 unsigned long SpecialValue = 0;
 unsigned long CurrentTime = 0;
 unsigned long SoundSettingTimeout = 0;
+
+#ifdef RPU_SIMPLIFY_DISPLAY_FOR_7VOLUTION
+boolean ScrollingScores = false;
+#else
+boolean ScrollingScores = true;
+#endif
 
 
 /*********************************************************************
@@ -582,6 +587,9 @@ void ReadStoredParameters() {
   }
 
   ScrollingScores = (ReadSetting(EEPROM_SCROLLING_SCORES_BYTE, 1)) ? true : false;
+#ifdef RPU_SIMPLIFY_DISPLAY_FOR_7VOLUTION
+  ScrollingScores = false;
+#endif
 
   ExtraBallValue = RPU_ReadULFromEEProm(EEPROM_EXTRA_BALL_SCORE_BYTE);
   if (ExtraBallValue % 1000 || ExtraBallValue > 100000) ExtraBallValue = 20000;
@@ -1112,10 +1120,10 @@ void ShowLaneLamps() {
 unsigned long LastTimeScoreChanged = 0;
 unsigned long LastTimeOverrideAnimated = 0;
 unsigned long LastFlashOrDash = 0;
+#define DISPLAY_OVERRIDE_BLANK_SCORE 0xFFFFFFFF
 #ifdef USE_SCORE_OVERRIDES
 unsigned long ScoreOverrideValue[4] = {0, 0, 0, 0};
 byte ScoreOverrideStatus = 0;
-#define DISPLAY_OVERRIDE_BLANK_SCORE 0xFFFFFFFF
 #endif
 byte LastScrollPhase = 0;
 
@@ -1137,6 +1145,12 @@ void OverrideScoreDisplay(byte displayNum, unsigned long value, boolean animate)
   if (animate) ScoreOverrideStatus |= (0x01 << displayNum);
   else ScoreOverrideStatus &= ~(0x01 << displayNum);
   ScoreOverrideValue[displayNum] = value;
+}
+#else
+void OverrideScoreDisplay(byte displayNum, unsigned long value, boolean animate) {
+  (void)displayNum;
+  (void)value;
+  (void)animate;
 }
 #endif
 
@@ -1280,6 +1294,17 @@ void ShowPlayerScores(byte displayToUpdate, boolean flashCurrent, boolean dashCu
               else RPU_SetDisplay(scoreCount, displayScore, true, 2);
             }
           } else if (dashCurrent && displayToUpdate == scoreCount) {
+#ifdef RPU_SIMPLIFY_DISPLAY_FOR_7VOLUTION
+            unsigned long dashSeed = (CurrentTime / 250)%4;
+            if (dashSeed != LastFlashOrDash) {
+              LastFlashOrDash = dashSeed;
+              if (dashSeed) {
+                RPU_SetDisplay(scoreCount, displayScore, true, 2);
+              } else {
+                RPU_SetDisplayBlank(scoreCount, 0x00);
+              }
+            }
+#else            
             unsigned long dashSeed = CurrentTime / 50;
             if (dashSeed != LastFlashOrDash) {
               LastFlashOrDash = dashSeed;
@@ -1302,6 +1327,7 @@ void ShowPlayerScores(byte displayToUpdate, boolean flashCurrent, boolean dashCu
                 RPU_SetDisplay(scoreCount, displayScore, true, 2);
               }
             }
+#endif            
           } else {
 #ifdef USE_SCORE_ACHIEVEMENTS
             byte blank;
@@ -3803,20 +3829,28 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
           //          return MACHINE_STATE_ATTRACT;
           break;
         case SW_TILT:
-          // This should be debounced
-          if ((CurrentTime - LastTiltWarningTime) > TILT_WARNING_DEBOUNCE_TIME) {
-            LastTiltWarningTime = CurrentTime;
-            NumTiltWarnings += 1;
-            if (NumTiltWarnings > MaxTiltWarnings) {
-              RPU_DisableSolenoidStack();
-              RPU_SetDisableFlippers(true);
-              RPU_TurnOffAllLamps();
-              StopAudio();
-              PlaySoundEffect(SOUND_EFFECT_TILT, ConvertVolumeSettingToGain(SoundEffectsVolume));
-              RPU_SetLampState(LAMP_HEAD_TILT, 1);
-              SetGeneralIllumination(false);
+          // Tilt only counts if the playfield has been qualified
+          if (BallFirstSwitchHitTime) {
+            if ((CurrentTime - LastTiltWarningTime) > TILT_WARNING_DEBOUNCE_TIME) {
+              LastTiltWarningTime = CurrentTime;
+              NumTiltWarnings += 1;
+              if (NumTiltWarnings > MaxTiltWarnings) {
+                RPU_DisableSolenoidStack();
+                RPU_SetDisableFlippers(true);
+                RPU_TurnOffAllLamps();
+                StopAudio();
+                PlaySoundEffect(SOUND_EFFECT_TILT, ConvertVolumeSettingToGain(SoundEffectsVolume));
+                RPU_SetLampState(LAMP_HEAD_TILT, 1);
+                SetGeneralIllumination(false);
+              }
+              PlaySoundEffect(SOUND_EFFECT_TILT_WARNING, ConvertVolumeSettingToGain(SoundEffectsVolume));
             }
-            PlaySoundEffect(SOUND_EFFECT_TILT_WARNING, ConvertVolumeSettingToGain(SoundEffectsVolume));
+          } else {
+            // Tilt before ball is plunged -- show a timer in ManageGameMode if desired
+            if ( CurrentTime > (LastTiltWarningTime + TILT_WARNING_DEBOUNCE_TIME) ) {
+              PlaySoundEffect(SOUND_EFFECT_TILT_WARNING, ConvertVolumeSettingToGain(SoundEffectsVolume));
+            }
+            LastTiltWarningTime = CurrentTime;
           }
           break;
         case SW_SELF_TEST_SWITCH:
